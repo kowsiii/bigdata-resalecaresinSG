@@ -8,7 +8,9 @@ names: Gloria Goh Su Yi, Kowsalya Ganesan, Nguyen Ngoc Quynh Tram, Qistina Purna
 In this project, we will be analysing the used car market dynamics in Singapore. We will be looking at the factors that affect the price of a used car and their significance.
 
 ### Data Source
-We will be scraping data from sgCarMart.com, a website that has listings of new and used cars in Singapore. The data was scraped using the *rvest* and *httr* packages in R, and further manipulated using the *dplyr* and *stringr* packages. The data was scraped on 14 November 2023 and contains 23 columns and 16,393 rows.
+We will be scraping data from sgCarMart.com, a website that has listings of new and used cars in Singapore. The data was scraped using the *rvest* and *httr* packages in R, and further manipulated using the *dplyr* and *stringr* packages. The data was scraped on 12 November 2023 and contains 23 columns and 16,393 rows.
+
+-------------START OF WEB SCRAPING----------------
 
 ```{r}
 library(rvest)
@@ -606,7 +608,7 @@ results_df
 write.csv(results_df, file = "sgCarMart_scraped.csv")
 ```
 
-----------------END OF DATA SCRAPING----------------
+----------------END OF WEB SCRAPING----------------
 
 
 -------------START OF DATA CLEANING----------------
@@ -627,9 +629,16 @@ sc <- spark_connect(master = "local", version = "3.4.0")
 
 ```{r}
 # Define your schema
-schema <- list("INDEX" = "integer", "HEADER" = "character", "PRICE" = "double", "TYPE" = "character", "FEATURES" = "character", "ACCESSORIES" = "character", "DESCRIPTION" = "character", "CATEGORIES" = "character", "MILEAGE_KM" = "double", "ROAD_TAX" = "double", "DEREG_VAL" = "double", "COE_LISTED" = "double", "ENGINE_CAPACITY_CC" = "double", "CURB_WEIGHT_KG" = "double", "MANUFACTURED_YEAR" = "double", "TRANSMISSION" = "character", "OMV" = "double", "ARF" = "double", "POWER" = "double", "NUM_PAST_OWNERS" = "character", "DEPRE_VAL" = "double", "REG_DATE" = "character", "COE_TIME_LEFT" = "character")
+# schema <- list("INDEX" = "integer", "HEADER" = "character", "PRICE" = "double", "TYPE" = "character", "FEATURES" = "character", "ACCESSORIES" = "character", "DESCRIPTION" = "character", "CATEGORIES" = "character", "MILEAGE_KM" = "double", "ROAD_TAX" = "double", "DEREG_VAL" = "double", "COE_LISTED" = "double", "ENGINE_CAPACITY_CC" = "double", "CURB_WEIGHT_KG" = "double", "MANUFACTURED_YEAR" = "double", "TRANSMISSION" = "character", "OMV" = "double", "ARF" = "double", "POWER" = "double", "NUM_PAST_OWNERS" = "character", "DEPRE_VAL" = "double", "REG_DATE" = "character", "COE_TIME_LEFT" = "character")
 
-resale_cars_df <- spark_read_csv(sc, "sgCarMart_scraped.csv", escape = "\"", name = "resale_cars", columns = schema, na.strings = c("NA","N.A.","", " "))
+
+# resale_cars_df <- spark_read_csv(sc, "sgCarMart_scraped.csv", escape = "\"", name = "resale_cars", columns = schema, na.strings = c("NA","N.A.","", " "))
+
+# na_strings <- c("NA","N.A.","", " ")
+
+scraped_df <- read.csv("sgCarMart_scraped.csv", na.strings = c("NA","N.A.","", " "), col.names = c("INDEX", "HEADER", "PRICE", "TYPE", "FEATURES", "ACCESSORIES", "DESCRIPTION", "CATEGORIES", "MILEAGE_KM", "ROAD_TAX", "DEREG_VAL", "COE_LISTED", "ENGINE_CAPACITY_CC", "CURB_WEIGHT_KG", "MANUFACTURED_YEAR", "TRANSMISSION", "OMV", "ARF", "POWER", "NUM_PAST_OWNERS", "DEPRE_VAL", "REG_DATE", "COE_TIME_LEFT"))
+
+resale_cars_df <- copy_to(sc, scraped_df, overwrite=TRUE)
 
 resale_cars_df
 ```
@@ -643,7 +652,7 @@ resale_cars_df <- resale_cars_df |> select(-1,-CATEGORIES)
 ```
 
 
-STEP 2: GET BRAND AND SUBMODEL
+STEP 2: GET BRAND AND MODEL_SUBMODEL
 
 ```{r}
 resale_cars_df <- resale_cars_df |>
@@ -764,7 +773,7 @@ resale_cars_df <- resale_cars_df |>
 ```
 
 
-STEP 6: IMPUTE NA VALUES WITH SUBMODEL-MANUFACTURING_YR GROUP INFO WHERE AVAILABLE
+STEP 6: IMPUTE NA VALUES WITH SUBMODEL-MANUFACTURING_YR GROUPED INFO WHERE AVAILABLE
 
 ```{r}
 ##imputing CURB_WEIGHT, ENGINE CAPACITY and POWER according to model_submodel + manufactured year 
@@ -1150,9 +1159,16 @@ spark_disconnect(sc)
 
 ----------END OF DATA ANALYSIS----------
 
+----------START OF PLUMBER-----------
+
+```{r}
+library(plumber)
+```
+
 ```{r}
 # Run plumber
 plumb(file = "spark-plumber-cars.R") |>
   pr_run(port = 8000)
 ```
 
+----------END OF PLUMBER-----------

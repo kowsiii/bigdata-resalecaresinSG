@@ -1,0 +1,206 @@
+---
+title: "Modeling_final"
+output: html_notebook
+---
+
+
+```{r}
+library(dplyr)
+library(readr)
+
+df <- read_csv("cleaned_resalecars.csv")
+```
+
+```{r}
+library(sparklyr)
+sc <- spark_connect(master = "local", version = "3.4.0")
+
+#read parquet file as df
+df_parquet <- spark_read_parquet(sc, "cleaned_resalecars.parquet")
+```
+
+```{r}
+#model 1 (without text-based features)
+pipeline <- ml_pipeline(sc) |>
+  ft_vector_assembler(
+    input_cols = c("MILEAGE_KM", "CURB_WEIGHT_KG", "OMV", "COE_LISTED", "ENGINE_CAPACITY_CC", "AGE_SINCE_MANUFACTURED", "DAYS_SINCE_REGISTERED", "NUM_PAST_OWNERS", "DAYS_OF_COE_LEFT"), 
+    output_col = "features"
+  ) |>
+  ft_standard_scaler(
+    input_col = "features", 
+    output_col = "features_scaled", 
+    with_mean = TRUE
+  ) |>
+  ft_string_indexer(
+    input_col = "TYPE", 
+    output_col = "TYPE_index"
+  ) |>
+  ft_string_indexer(
+    input_col = "TRANSMISSION", 
+    output_col = "TRANSMISSION_index"
+  ) |>
+  ft_string_indexer(
+    input_col = "BRAND_CATEGORY", 
+    output_col = "BRAND_CATEGORY_index"
+  ) |>
+  ft_vector_assembler(
+    input_cols = c("features_scaled", "TYPE_index", "TRANSMISSION_index", "BRAND_CATEGORY_index"), 
+    output_col = "final_features"
+  ) |>
+  ml_linear_regression(
+    features_col = "final_features",
+    label_col = "PRICE"
+  ) 
+  
+pipeline 
+```
+
+```{r}
+#pipeline 2 (with text-based features)
+pipeline <- ml_pipeline(sc) |>
+  ft_vector_assembler(
+    input_cols = c("MILEAGE_KM", "CURB_WEIGHT_KG", "OMV", "COE_LISTED", "ENGINE_CAPACITY_CC", "AGE_SINCE_MANUFACTURED", "DAYS_SINCE_REGISTERED", "NUM_PAST_OWNERS", "DAYS_OF_COE_LEFT", "FEATURE_COUNT", "ACCESSORIES_COUNT"),
+    output_col = "features"
+  ) |>
+  ft_standard_scaler(
+    input_col = "features", 
+    output_col = "features_scaled", 
+    with_mean = TRUE
+  ) |>
+  ft_string_indexer(
+    input_col = "TYPE", 
+    output_col = "TYPE_index"
+  ) |>
+  ft_string_indexer(
+    input_col = "TRANSMISSION", 
+    output_col = "TRANSMISSION_index"
+  ) |>
+  ft_string_indexer(
+    input_col = "BRAND_CATEGORY", 
+    output_col = "BRAND_CATEGORY_index"
+  ) |>
+  ft_vector_assembler(
+    input_cols = c("features_scaled", "TYPE_index", "TRANSMISSION_index", "BRAND_CATEGORY_index"), 
+    output_col = "final_features"
+  ) |>
+  ml_linear_regression(
+    features_col = "final_features",
+    label_col = "PRICE"
+  ) 
+
+pipeline 
+```
+
+```{r}
+#pipeline 3 (w/o days_since_registered but with text-based feautures)
+pipeline <- ml_pipeline(sc) |>
+  ft_vector_assembler(
+    input_cols = c("MILEAGE_KM", "CURB_WEIGHT_KG", "OMV", "COE_LISTED", "ENGINE_CAPACITY_CC", "AGE_SINCE_MANUFACTURED", "NUM_PAST_OWNERS", "DAYS_OF_COE_LEFT", "FEATURE_COUNT", "ACCESSORIES_COUNT"), 
+    output_col = "features"
+  ) |>
+  ft_standard_scaler(
+    input_col = "features", 
+    output_col = "features_scaled", 
+    with_mean = TRUE
+  ) |>
+  ft_string_indexer(
+    input_col = "TYPE", 
+    output_col = "TYPE_index"
+  ) |>
+  ft_string_indexer(
+    input_col = "TRANSMISSION", 
+    output_col = "TRANSMISSION_index"
+  ) |>
+  ft_string_indexer(
+    input_col = "BRAND_CATEGORY", 
+    output_col = "BRAND_CATEGORY_index"
+  ) |>
+  ft_vector_assembler(
+    input_cols = c("features_scaled", "TYPE_index", "TRANSMISSION_index", "BRAND_CATEGORY_index"), 
+    output_col = "final_features"
+  ) |>
+  ml_linear_regression(
+    features_col = "final_features",
+    label_col = "PRICE"
+  ) 
+
+pipeline 
+```
+
+```{r}
+#Cross validation: Split data into train and test sets
+df_split <- df_parquet |>
+  sdf_random_split(training = 0.8, testing = 0.2, seed = 1234)
+
+df_train <- df_split$training
+df_test <- df_split$testing
+```
+
+```{r}
+#Fitting pipeline to model 
+pipeline_model <- ml_fit(pipeline, df_train)  
+pipeline_model
+```
+
+```{r}
+# Get the linear regression model from the fitted pipeline 
+lr_model <- pipeline_model$stages[[length(pipeline_model$stages)]]  
+# Access the coefficients of the linear regression model 
+coefficients <- coefficients(lr_model)
+coefficients
+```
+
+```{r}
+#Cross validate pipeline_model
+cv <- ml_cross_validator(
+  sc,
+  estimator = pipeline,
+  estimator_param_maps = list(
+    linear_regression = list(
+      elastic_net_param = c(0,1),
+      reg_param = c(0.1, 0.005, 0.001)
+    )
+  ),
+  evaluator = ml_regression_evaluator(
+    sc,
+    label_col = "PRICE"
+  ),
+  num_folds = 10,
+  parallelism = 1,
+  seed = 123
+)
+cv
+```
+
+```{r}
+#Validating best model.
+cv_model <- ml_fit(cv, df_train) 
+
+cv_model$best_model
+
+ml_validation_metrics(cv_model) |>
+  arrange(rmse)
+
+cv_predict <- ml_predict(cv_model$best_model, df_test)
+```
+
+```{r}
+#calculate mse for our prediction model  
+RMSE_1 <- ml_regression_evaluator(
+  cv_predict,
+  label_col = "PRICE",
+  prediction_col = "prediction",
+  metric_name = "rmse"
+)
+
+RMSE_1
+```
+
+```{r}
+#save pipeline 
+ml_save(pipeline, path = "spark_pipeline_cars", overwrite = TRUE)
+
+#load pipeline 
+pipeline <- ml_load(sc, path = "spark_pipeline_cars")
+```
+

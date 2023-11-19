@@ -854,7 +854,7 @@ resale_cars_df
 write.csv(resale_cars_df, "cleaned_resalecars.csv", row.names=FALSE)
 
 ## we also save a parquet file
-spark_write_parquet(resale_cars_df, 'cleaned_resalecars.parquet')
+spark_write_parquet(resale_cars_df, 'cleaned_resalecars.parquet', mode = "overwrite")
 ```
 
 ----------END OF DATA CLEANING----------
@@ -1143,6 +1143,15 @@ RMSE_1 <- ml_regression_evaluator(
 )
 
 RMSE_1
+
+#test for highest adj r^2
+rsquared <- ml_regression_evaluator(
+  cv_predict,
+  label_col = "PRICE",
+  prediction_col = "prediction",
+  metric_name = "r2"
+)
+rsquared
 ```
 
 ```{r}
@@ -1167,7 +1176,7 @@ library(plumber)
 
 ```{r}
 # Run plumber
-plumb(file = "spark-plumber-cars.R") |>
+plumb(file = "final-spark-plumber-cars.R") |>
   pr_run(port = 8000)
 ```
 
